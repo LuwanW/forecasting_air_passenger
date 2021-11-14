@@ -4,7 +4,7 @@ from tensorflow import keras
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error
 from keras.models import Sequential
 from keras.layers import Embedding
 from keras.layers import Dense
@@ -18,6 +18,9 @@ import keras_tuner as kt
 class LSTM_model:
     def __init__(self, data, train, test, n_window):
         n_prediction = 24
+        # mode model 0 for model withou feature extraction, 1 for original model, 2 for keras tuner, 3 for turned model
+        mode = 0
+
 
         # data scaling train
         scalar = MinMaxScaler(feature_range=(0, 1))
@@ -34,8 +37,8 @@ class LSTM_model:
         np_arr_test = np_arr_test.reshape(-1, 1)
         test['value'] = scalar.transform(np_arr_test)
 
-        x_train, y_train = self.prepare_train_data(train, n_window, scalar)
-        x_test, y_test = self.prepare_test_data(train, test, n_window, scalar, n_prediction)
+        x_train, y_train = self.prepare_train_data(train, n_window, scalar, mode)
+        x_test, y_test = self.prepare_test_data(train, test, n_window, scalar, n_prediction, mode)
 
 
 
@@ -49,11 +52,24 @@ class LSTM_model:
         n_all_features = n_window + n_extract_features
 
 
-        # tune model 0 for original model, 1 for keras tuner, 2 for turned model
-        tune = 2
+        # assignement 1 model, no extracted feature
+        if mode == 0:
+            hidden_layer = 3
+            n_neurons = 64
+            drop_out = 0.3
+            model = Sequential()
+            model.add(LSTM(n_neurons, activation='relu', input_shape=(1, n_window)))
+            for i in range(hidden_layer):
+                model.add(Dense(n_neurons))
+            model.add(Dropout(drop_out))
 
-        if tune == 0:
-            # original model
+            model.add(Dense(1))
+            model.compile(optimizer='adam', loss='mse', metrics=['mse', 'mae', 'mape'])
+            history = model.fit(x_train, y_train, validation_split=0.33, batch_size=10, epochs=90, verbose=0)
+            model.summary()
+
+        # original model
+        elif mode == 1:
             hidden_layer = 3
             n_neurons = 64
             drop_out = 0.3
@@ -69,20 +85,20 @@ class LSTM_model:
             model.summary()
 
 
-        elif tune == 1:
+        elif mode == 2:
             # prepare for model tuning
             def build_model(hp):
-                # # tune number of neurons
+                # # mode number of neurons
                 model = Sequential()
                 model.add(LSTM(hp.Int('input_unit',min_value=32,max_value=128,step=32), activation='relu', input_shape=(1, n_all_features), return_sequences=True))
-                # tune hidden layer
+                # mode hidden layer
                 for i in range(hp.Int('n_layers', 0, 3)):
                     model.add(Dense(units=hp.Int('num_of_neurons', min_value=32, max_value=128, step=32),
                     activation = 'relu'))
 
-                # tune dropout rate
+                # mode dropout rate
                 model.add(Dropout(hp.Float('Dropout_rate',min_value=0,max_value=0.3,step=0.05)))
-                # tune activation function
+                # mode activation function
                 model.add(Dense(1,
                                 activation=hp.Choice('dense_activation', values=['relu', 'sigmoid'], default='relu')))
                 model.compile(loss='mse',  metrics=['mse', 'mae', 'mape'] ,optimizer='adam')
@@ -110,7 +126,6 @@ class LSTM_model:
             model = tuner.hypermodel.build(best_hps)
             history = model.fit(x_train, y_train, validation_split=0.33, batch_size=10, epochs=90, verbose=0)
 
-            # = tuner.get_best_models(num_models=1)[0]
             model.summary()
 
             # # find minimum MAPE
@@ -126,7 +141,7 @@ class LSTM_model:
             # Retrain with best epoch
             # history = model.fit(x_train, y_train,epochs=best_epoch, validation_split=0.2)
 
-        elif tune == 2:
+        elif mode == 3:
             # original model
             hidden_layer = 0
             n_neurons = 32
@@ -177,9 +192,9 @@ class LSTM_model:
         y_train_scale_back = scalar.inverse_transform(y_train.reshape(-1, 1))
 
         # plot test result
-        forecasting_df = pd.DataFrame(predict_test, index=test[-n_prediction:].index,
+        forecasting_df = pd.DataFrame(predict_test_scale_back, index=test[-n_prediction:].index,
                                       columns=['forecast'])
-        forecasting_df['test'] = y_test
+        forecasting_df['test'] = y_test_scale_back
 
         forecasting_df.plot()
         plt.title("LSTM")
@@ -190,30 +205,31 @@ class LSTM_model:
         print(forecasting_df)
 
         # print MSE test result
-        print('MSE test: ', mean_squared_error(y_test, predict_test))
-        print('MSE train: ', mean_squared_error(y_train, predict_train))
+        print('MSE test: ', mean_squared_error(y_test_scale_back, predict_test_scale_back))
+        print('MSE train: ', mean_squared_error(y_train_scale_back, predict_train_scale_back))
+        print('MAPE test: ', mean_absolute_percentage_error(y_test_scale_back, predict_test_scale_back))
+        print('MAPE train: ', mean_absolute_percentage_error(y_train_scale_back, predict_train_scale_back))
 
 
 
 
-
-    def tune_model(self, model):
-        pass
 
     # transform each data to n features with each feature's n adjacent datapoint
-    def prepare_train_data(self, data_dict, n_window, scalar):
+    def prepare_train_data(self, data_dict, n_window, scalar, tune):
         data = data_dict['value'].tolist()
         x = []
         y = []
         for i in range(len(data) - n_window - 1):
-            extracted_feature = self.add_extract_feature(data_dict,scalar, i)
+            extracted_feature = []
+            if tune !=0:
+                extracted_feature = self.add_extract_feature(data_dict,scalar, i)
             this_x = data[i:i + n_window] + extracted_feature
             x.append(this_x)
             this_y = data[i + n_window]
             y.append(this_y)
         return np.asarray(x), np.asarray(y)
 
-    def prepare_test_data(self, train, data_dict, n_window, scalar, n_prediction):
+    def prepare_test_data(self, train, data_dict, n_window, scalar, n_prediction, tune):
         missing_window = train['value'].tolist()[-n_window:]
 
         data = data_dict['value'].tolist()
@@ -221,7 +237,9 @@ class LSTM_model:
         x = []
         y = []
         for i in range(n_prediction):
-            extracted_feature = self.add_extract_feature(data_dict,scalar, i)
+            extracted_feature = []
+            if tune !=0:
+                extracted_feature = self.add_extract_feature(data_dict,scalar, i)
             this_x = data[i:i + n_window] + extracted_feature
             x.append(this_x)
             this_y = data[i + n_window]
