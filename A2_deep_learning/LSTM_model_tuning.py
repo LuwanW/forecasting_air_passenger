@@ -19,7 +19,7 @@ class LSTM_model:
     def __init__(self, data, train, test, n_window):
         n_prediction = 24
         # mode model 0 for model withou feature extraction, 1 for original model, 2 for keras tuner, 3 for turned model
-        mode = 0
+        mode = 2
 
 
         # data scaling train
@@ -90,37 +90,38 @@ class LSTM_model:
             def build_model(hp):
                 # # mode number of neurons
                 model = Sequential()
-                model.add(LSTM(hp.Int('input_unit',min_value=32,max_value=128,step=32), activation='relu', input_shape=(1, n_all_features), return_sequences=True))
+                model.add(LSTM(hp.Int('input_unit', min_value=32, max_value=64, step=32), activation='relu',
+                               input_shape=(1, n_all_features), return_sequences=True))
                 # mode hidden layer
                 for i in range(hp.Int('n_layers', 0, 3)):
-                    model.add(Dense(units=hp.Int('num_of_neurons', min_value=32, max_value=128, step=32),
-                    activation = 'relu'))
+                    model.add(Dense(units=hp.Int('num_of_neurons', min_value=32, max_value=64, step=32),
+                                    activation='relu'))
 
                 # mode dropout rate
-                model.add(Dropout(hp.Float('Dropout_rate',min_value=0,max_value=0.3,step=0.05)))
+                model.add(Dropout(hp.Float('Dropout_rate', min_value=0, max_value=0.2, step=0.05)))
                 # mode activation function
                 model.add(Dense(1,
                                 activation=hp.Choice('dense_activation', values=['relu', 'sigmoid'], default='relu')))
-                model.compile(loss='mse',  metrics=['mse', 'mae', 'mape'] ,optimizer='adam')
+                model.compile(loss='mse', metrics=['mse', 'mae', 'mape'], optimizer='adam')
                 return model
 
-            tuner = kt.Hyperband(
+            tuner = kt.RandomSearch(
                     hypermodel=build_model,
                     objective='val_mse',
-                    factor=3,
-                    max_epochs=100,
-                    project_name='hyperband_tuner'
+                    max_trials=30,
+                    directory = "D:\\ECE9063_data_analysis\\Forecasting_Air_Passengers\\A2_deep_learning\\tb_best",
                     )
 
             stop_early = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5)
 
             tuner.search(x_train,
                          y_train,
-                         epochs=20,
+                         epochs=30,
                          validation_split=0.33,
-                            callbacks = [stop_early]
+                         callbacks = [stop_early, keras.callbacks.TensorBoard("D:\\ECE9063_data_analysis\\Forecasting_Air_Passengers\\A2_deep_learning\\tb_logs")]
                          )
-            tuner.results_summary()
+            tuner_result = tuner.results_summary(num_trials=30)
+
 
             best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
             model = tuner.hypermodel.build(best_hps)
